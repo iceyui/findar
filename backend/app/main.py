@@ -1,7 +1,6 @@
 import asyncio
 import os
 import re
-import shutil
 import time
 import uuid
 import multiprocessing as mp
@@ -69,6 +68,10 @@ def _run_with_timeout(func, args, timeout_seconds):
     if isinstance(result, Exception):
         raise result
     return result
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 def _cleanup_old_files(base_dir: Path, ttl_seconds: int) -> None:
@@ -198,19 +201,31 @@ async def process_file(
             status_code=400, detail="File or upload id must be provided"
         )
 
+    finder_args = (
+        str(upload_path),
+        target_values,
+        tolerance,
+        max_invoices,
+        str(OUTPUT_DIR),
+    )
+
     try:
-        output_file, total_rows = await asyncio.to_thread(
-            _run_with_timeout,
-            find_invoice_combinations_for_targets,
-            (
-                str(upload_path),
-                target_values,
-                tolerance,
-                max_invoices,
-                str(OUTPUT_DIR),
-            ),
-            PROCESS_TIMEOUT_SECONDS,
-        )
+        if _is_windows():
+            # Windows + uvicorn reload + multiprocessing can fail with WinError 6
+            output_file, total_rows = await asyncio.wait_for(
+                asyncio.to_thread(
+                    find_invoice_combinations_for_targets,
+                    *finder_args,
+                ),
+                timeout=PROCESS_TIMEOUT_SECONDS,
+            )
+        else:
+            output_file, total_rows = await asyncio.to_thread(
+                _run_with_timeout,
+                find_invoice_combinations_for_targets,
+                finder_args,
+                PROCESS_TIMEOUT_SECONDS,
+            )
     except TimeoutError:
         raise HTTPException(
             status_code=504,
