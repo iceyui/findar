@@ -1,5 +1,5 @@
 [Unit]
-Description=AR BBN API
+Description=Iceyuki AR Matcher API
 After=network.target
 
 [Service]

@@ -1,15 +1,19 @@
 import asyncio
+import base64
 import os
 import re
 import time
 import uuid
+import zipfile
 import multiprocessing as mp
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+import httpx
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .invoice_finder import find_invoice_combinations_for_targets
 
@@ -22,21 +26,47 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 DEFAULT_TOLERANCE = 100
 DEFAULT_MAX_INVOICES = 5
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_XLSX_UNCOMPRESSED_BYTES = int(
+    os.getenv("MAX_XLSX_UNCOMPRESSED_BYTES", str(100 * 1024 * 1024))
+)
+MAX_XLSX_ENTRY_BYTES = int(os.getenv("MAX_XLSX_ENTRY_BYTES", str(50 * 1024 * 1024)))
+MAX_XLSX_ENTRIES = int(os.getenv("MAX_XLSX_ENTRIES", "1000"))
 CLEANUP_TTL_SECONDS = int(os.getenv("CLEANUP_TTL_SECONDS", "3600"))
 CLEANUP_INTERVAL_SECONDS = int(
     os.getenv("CLEANUP_INTERVAL_SECONDS", str(CLEANUP_TTL_SECONDS))
 )
 PROCESS_TIMEOUT_SECONDS = int(os.getenv("PROCESS_TIMEOUT_SECONDS", "600"))
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = (
+    os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+    or os.getenv("SUPABASE_ANON_KEY", "").strip()
+)
+ALLOWED_AUTH_EMAILS = {
+    item.strip().lower()
+    for item in os.getenv("ALLOWED_AUTH_EMAILS", "").split(",")
+    if item.strip()
+}
+ALLOWED_AUTH_DOMAINS = {
+    item.strip().lower().lstrip("@")
+    for item in os.getenv("ALLOWED_AUTH_DOMAINS", "").split(",")
+    if item.strip()
+}
 
 FILENAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+bearer_scheme = HTTPBearer(auto_error=False)
 
-app = FastAPI(title="Cari Piutang API")
+app = FastAPI(title="Iceyuki AR Matcher API")
 
 cors_origins = os.getenv("CORS_ORIGINS", "").strip()
 if cors_origins:
     allowed_origins = [item.strip() for item in cors_origins.split(",") if item.strip()]
 else:
-    allowed_origins = ["https://ar.cisan.id", "http://ar.cisan.id"]
+    allowed_origins = [
+        "https://ar.iceyuki.com",
+        "http://ar.iceyuki.com",
+        "https://api-ar.iceyuki.com",
+        "http://api-ar.iceyuki.com",
+    ]
 
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +75,44 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def require_authenticated_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+):
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(status_code=401, detail="Login diperlukan")
+
+    if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
+        raise HTTPException(status_code=503, detail="Supabase Auth belum dikonfigurasi")
+
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/auth/v1/user",
+                headers={
+                    "apikey": SUPABASE_PUBLISHABLE_KEY,
+                    "Authorization": f"Bearer {credentials.credentials}",
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="Gagal memvalidasi login") from exc
+
+    if response.status_code in {401, 403}:
+        raise HTTPException(status_code=401, detail="Sesi login tidak valid")
+    if response.status_code != 200:
+        raise HTTPException(status_code=503, detail="Gagal memvalidasi login")
+
+    user = response.json()
+    email = str(user.get("email") or "").lower()
+    domain = email.rsplit("@", 1)[-1] if "@" in email else ""
+
+    if ALLOWED_AUTH_EMAILS and email not in ALLOWED_AUTH_EMAILS:
+        raise HTTPException(status_code=403, detail="Email tidak diizinkan")
+    if ALLOWED_AUTH_DOMAINS and domain not in ALLOWED_AUTH_DOMAINS:
+        raise HTTPException(status_code=403, detail="Domain email tidak diizinkan")
+
+    return user
 
 def _run_with_timeout(func, args, timeout_seconds):
     queue = mp.Queue()
@@ -115,6 +183,36 @@ async def _save_upload(upload: UploadFile, dest: Path) -> None:
             handle.write(chunk)
 
 
+def _validate_xlsx_file(file_path: Path) -> None:
+    if not zipfile.is_zipfile(file_path):
+        raise HTTPException(status_code=400, detail="File .xlsx tidak valid")
+
+    try:
+        with zipfile.ZipFile(file_path) as archive:
+            infos = archive.infolist()
+            if len(infos) > MAX_XLSX_ENTRIES:
+                raise HTTPException(status_code=400, detail="File Excel terlalu kompleks")
+
+            total_uncompressed = 0
+            has_content_types = False
+            for info in infos:
+                normalized_name = info.filename.replace("\\", "/")
+                if normalized_name == "[Content_Types].xml":
+                    has_content_types = True
+                if normalized_name.startswith("/") or ".." in normalized_name.split("/"):
+                    raise HTTPException(status_code=400, detail="File .xlsx tidak valid")
+                if info.file_size > MAX_XLSX_ENTRY_BYTES:
+                    raise HTTPException(status_code=400, detail="File Excel terlalu besar")
+                total_uncompressed += info.file_size
+                if total_uncompressed > MAX_XLSX_UNCOMPRESSED_BYTES:
+                    raise HTTPException(status_code=400, detail="File Excel terlalu besar")
+
+            if not has_content_types:
+                raise HTTPException(status_code=400, detail="File .xlsx tidak valid")
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="File .xlsx tidak valid") from exc
+
+
 def _parse_targets(raw_targets: str):
     if raw_targets is None:
         return []
@@ -144,7 +242,7 @@ async def _shutdown() -> None:
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "ok", "auth_configured": bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY)}
 
 
 @app.post("/api/process")
@@ -154,6 +252,7 @@ async def process_file(
     targets: str = Form(...),
     tolerance: int = Form(DEFAULT_TOLERANCE),
     max_invoices: int = Form(DEFAULT_MAX_INVOICES),
+    current_user: dict = Depends(require_authenticated_user),
 ):
     _cleanup_old_files(UPLOAD_DIR, CLEANUP_TTL_SECONDS)
     _cleanup_old_files(OUTPUT_DIR, CLEANUP_TTL_SECONDS)
@@ -196,6 +295,11 @@ async def process_file(
             if upload_path.exists():
                 upload_path.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+        try:
+            _validate_xlsx_file(upload_path)
+        except HTTPException:
+            upload_path.unlink(missing_ok=True)
+            raise
     else:
         raise HTTPException(
             status_code=400, detail="File or upload id must be provided"
@@ -229,7 +333,7 @@ async def process_file(
     except TimeoutError:
         raise HTTPException(
             status_code=504,
-            detail="Proses terlalu lama. Coba kurangi jumlah invoice atau target.",
+            detail="Proses terlalu lama. Coba kurangi jumlah piutang atau target.",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -256,7 +360,10 @@ async def process_file(
 
 
 @app.get("/api/download/{file_name}")
-def download_file(file_name: str):
+def download_file(
+    file_name: str,
+    current_user: dict = Depends(require_authenticated_user),
+):
     _cleanup_old_files(OUTPUT_DIR, CLEANUP_TTL_SECONDS)
 
     if not FILENAME_RE.match(file_name):
@@ -271,8 +378,34 @@ def download_file(file_name: str):
         filename=file_name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+
+@app.get("/api/download-data/{file_name}")
+def download_file_data(
+    file_name: str,
+    current_user: dict = Depends(require_authenticated_user),
+):
+    _cleanup_old_files(OUTPUT_DIR, CLEANUP_TTL_SECONDS)
+
+    if not FILENAME_RE.match(file_name):
+        raise HTTPException(status_code=400, detail="Invalid file name")
+
+    file_path = OUTPUT_DIR / file_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return {
+        "file_name": file_name,
+        "media_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "data": base64.b64encode(file_path.read_bytes()).decode("ascii"),
+    }
+
+
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(require_authenticated_user),
+):
     _cleanup_old_files(UPLOAD_DIR, CLEANUP_TTL_SECONDS)
 
     if not file.filename or not file.filename.lower().endswith(".xlsx"):
@@ -295,12 +428,20 @@ async def upload_file(file: UploadFile = File(...)):
         if upload_path.exists():
             upload_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    try:
+        _validate_xlsx_file(upload_path)
+    except HTTPException:
+        upload_path.unlink(missing_ok=True)
+        raise
 
     return {"upload_id": upload_id, "file_name": safe_name}
 
 
 @app.delete("/api/upload/{upload_id}")
-async def delete_upload(upload_id: str):
+async def delete_upload(
+    upload_id: str,
+    current_user: dict = Depends(require_authenticated_user),
+):
     _cleanup_old_files(UPLOAD_DIR, CLEANUP_TTL_SECONDS)
 
     if not FILENAME_RE.match(upload_id):

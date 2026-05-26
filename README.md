@@ -1,6 +1,6 @@
-# Cari Piutang Web
+# Iceyuki AR Matcher
 
-Versi web untuk mencari kombinasi invoice dari file Excel berdasarkan nominal target dan toleransi.
+Versi web untuk mencari kombinasi piutang toko dari file Excel berdasarkan nominal pembayaran dan toleransi.
 
 ## Struktur
 - `backend/` FastAPI untuk upload, proses, dan download hasil
@@ -20,6 +20,13 @@ copy backend\\.env.example backend\\.env
 python backend\\run_dev.py
 ```
 
+3) Isi konfigurasi Supabase Auth di `backend\\.env`:
+```
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
+ALLOWED_AUTH_EMAILS=admin@iceyuki.com
+```
+
 ## Frontend (React + Vite)
 1) Install dependencies:
 ```
@@ -32,12 +39,19 @@ npm install
 copy .env.example .env
 ```
 
-3) Run dev server:
+3) Isi konfigurasi Supabase Auth di `frontend\\.env`:
+```
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
+```
+
+4) Run dev server:
 ```
 npm run dev
 ```
 
 ## API
+- Semua endpoint proses/download membutuhkan `Authorization: Bearer <supabase_access_token>`
 - `POST /api/process` upload file + target(s) + tolerance
 - `POST /api/upload` upload file, return `upload_id`
 - `DELETE /api/upload/{upload_id}` delete uploaded file
@@ -47,7 +61,7 @@ npm run dev
 - Batas upload default 10MB
 - Cleanup otomatis file sementara tiap 1 jam (bisa diubah lewat `CLEANUP_TTL_SECONDS`)
 - Interval cleanup bisa diubah lewat `CLEANUP_INTERVAL_SECONDS`
-- Tema UI: neo-brutalist / modern brutalism (vibe bold seperti Saweria)
+- Tema UI: ice/frost untuk branding iceyuki.com
 
 ## Deploy di VPS Ubuntu (contoh Nginx + systemd)
 
@@ -61,11 +75,11 @@ sudo apt install -y python3-venv python3-pip nginx
 Lihat `deploy/DEPLOY.md` untuk script setup dan deploy otomatis.
 
 ### 2) Upload project ke server
-Contoh lokasi: `/var/www/invoice-matcher`
+Contoh lokasi: `/var/www/ar-bbn`
 
 ### 3) Backend (FastAPI) sebagai service
 ```
-cd /var/www/invoice-matcher
+cd /var/www/ar-bbn
 python3 -m venv venv
 source venv/bin/activate
 pip install -r backend/requirements.txt
@@ -73,19 +87,19 @@ pip install -r backend/requirements.txt
 
 Buat file service:
 ```
-sudo nano /etc/systemd/system/invoice-matcher-api.service
+sudo nano /etc/systemd/system/ar-bbn-api.service
 ```
 Isi:
 ```
 [Unit]
-Description=Invoice Matcher API
+Description=Iceyuki AR Matcher API
 After=network.target
 
 [Service]
 User=www-data
-WorkingDirectory=/var/www/invoice-matcher
-EnvironmentFile=/var/www/invoice-matcher/backend/.env
-ExecStart=/var/www/invoice-matcher/venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port ${PORT}
+WorkingDirectory=/var/www/ar-bbn
+EnvironmentFile=/var/www/ar-bbn/backend/.env
+ExecStart=/var/www/ar-bbn/venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port ${PORT}
 Restart=always
 
 [Install]
@@ -95,29 +109,31 @@ WantedBy=multi-user.target
 Aktifkan service:
 ```
 sudo systemctl daemon-reload
-sudo systemctl enable --now invoice-matcher-api
-sudo systemctl status invoice-matcher-api
+sudo systemctl enable --now ar-bbn-api
+sudo systemctl status ar-bbn-api
 ```
 
 ### 4) Build frontend
 ```
-cd /var/www/invoice-matcher/frontend
+cd /var/www/ar-bbn/frontend
 npm install
-echo "VITE_API_BASE=https://ar.cisan.id" > .env
+echo "VITE_API_BASE=https://api-ar.iceyuki.com" > .env
+echo "VITE_SUPABASE_URL=https://your-project-ref.supabase.co" >> .env
+echo "VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key" >> .env
 npm run build
 ```
 
 ### 5) Nginx config
 ```
-sudo nano /etc/nginx/sites-available/invoice-matcher
+sudo nano /etc/nginx/sites-available/ar-bbn
 ```
 Isi:
 ```
 server {
     listen 80;
-    server_name ar.cisan.id;
+    server_name ar.iceyuki.com;
 
-    root /var/www/invoice-matcher/frontend/dist;
+    root /var/www/ar-bbn/frontend/dist;
     index index.html;
 
     location / {
@@ -138,7 +154,7 @@ Tambahkan server block untuk API subdomain:
 ```
 server {
     listen 80;
-    server_name api.ar.cisan.id;
+    server_name api-ar.iceyuki.com;
 
     location / {
         proxy_pass http://127.0.0.1:9001;
@@ -152,7 +168,7 @@ server {
 
 Aktifkan Nginx:
 ```
-sudo ln -s /etc/nginx/sites-available/invoice-matcher /etc/nginx/sites-enabled/
+sudo ln -s /etc/nginx/sites-available/ar-bbn /etc/nginx/sites-enabled/
 sudo nginx -t
 sudo systemctl reload nginx
 ```
@@ -160,5 +176,5 @@ sudo systemctl reload nginx
 ### 6) (Opsional) HTTPS dengan Let's Encrypt
 ```
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d ar.cisan.id
+sudo certbot --nginx -d ar.iceyuki.com -d api-ar.iceyuki.com
 ```

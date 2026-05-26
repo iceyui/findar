@@ -19,8 +19,10 @@ sudo bash scripts/deploy_vps.sh
 ## Notes
 - Service name: ar-bbn-api
 - App path: /var/www/ar-bbn
-- Domain (FE): ar.cisan.id
-- Domain (API): api.ar.cisan.id
+- Domain (FE): ar.iceyuki.com
+- Domain (API): api-ar.iceyuki.com
+- Auth: isi `SUPABASE_URL` dan `SUPABASE_PUBLISHABLE_KEY` di `backend/.env`
+- Frontend auth: isi `VITE_SUPABASE_URL` dan `VITE_SUPABASE_PUBLISHABLE_KEY` di `frontend/.env`
 
 ## Systemd template
 Use the template at `deploy/systemd/ar-bbn-api.service` to ensure

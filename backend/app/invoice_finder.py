@@ -6,6 +6,13 @@ from itertools import combinations
 import pandas as pd
 
 
+def _safe_excel_text(value):
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return f"'{text}"
+    return text
+
+
 def _load_invoice_dataframe(file_path):
     # Read Excel with dynamic header row containing "Nama Pelanggan"
     try:
@@ -92,10 +99,11 @@ def _find_results(df, col_map, target_nilai, toleransi, max_invoices):
                 if abs(total - target_nilai) <= toleransi:
                     results.append(
                         {
-                            "Pelanggan": nama_pelanggan,
+                            "Pelanggan": _safe_excel_text(nama_pelanggan),
                             "Jumlah Invoice": r,
                             "Invoice": ", ".join(
-                                str(inv[col_map["No. Faktur"]]) for inv in combo
+                                _safe_excel_text(inv[col_map["No. Faktur"]])
+                                for inv in combo
                             ),
                             "Tanggal": ", ".join(
                                 inv[col_map["Tgl. Faktur"]].strftime("%d/%m/%Y")
@@ -160,5 +168,8 @@ def find_invoice_combinations_for_targets(
         "Nilai",
         "Total",
     ]
-    pd.DataFrame(all_results)[columns].to_excel(output_file, index=False)
+    result_df = pd.DataFrame(all_results)[columns]
+    for column in ["Target", "Pelanggan", "Invoice", "Tanggal", "Nilai", "Total"]:
+        result_df[column] = result_df[column].map(_safe_excel_text)
+    result_df.to_excel(output_file, index=False)
     return output_file, len(all_results)

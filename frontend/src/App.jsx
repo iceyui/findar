@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const DEFAULT_TOLERANCE = 500;
 const TARGETS_STORAGE_KEY = "ar-bbn.targets";
@@ -153,6 +154,12 @@ const removeDigitFromRaw = (rawValue, displayValue, cursorIndex, direction) => {
 };
 
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
   const [file, setFile] = useState(null);
   const [targetsRaw, setTargetsRaw] = useState("");
   const [targetInput, setTargetInput] = useState("");
@@ -161,12 +168,41 @@ export default function App() {
   const [backendStatus, setBackendStatus] = useState("checking");
   const [backendLatency, setBackendLatency] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
   const fileInputRef = useRef(null);
   const targetsInputRef = useRef(null);
 
   const apiBase = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return undefined;
+    }
+
+    let active = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (active) {
+        setSession(data.session);
+        setAuthLoading(false);
+      }
+    });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -244,10 +280,17 @@ export default function App() {
     }
   };
 
+  const getAuthHeaders = () => {
+    if (!session?.access_token) return {};
+    return {
+      Authorization: `Bearer ${session.access_token}`
+    };
+  };
+
   const canSubmit = useMemo(() => {
-    const normalized = normalizeTargets(targetsRaw);
+    const normalized = normalizeTargets([targetsRaw, targetInput].filter(Boolean).join(","));
     return file && normalized && Number(normalized.split(",")[0]) > 0;
-  }, [file, targetsRaw]);
+  }, [file, targetsRaw, targetInput]);
 
   const backendLabel = useMemo(() => {
     if (backendStatus === "checking") {
@@ -257,7 +300,7 @@ export default function App() {
       return "Backend nonaktif";
     }
     if (backendLatency) {
-      return `Backend aktif · ${backendLatency}ms`;
+      return `Backend aktif - ${backendLatency}ms`;
     }
     return "Backend aktif";
   }, [backendStatus, backendLatency]);
@@ -302,7 +345,14 @@ export default function App() {
     setError("");
     setResult(null);
 
-    const normalizedTargets = normalizeTargets(targetsRaw);
+    if (!session?.access_token) {
+      setError("Sesi login tidak valid. Silakan login ulang.");
+      return;
+    }
+
+    const normalizedTargets = normalizeTargets(
+      [targetsRaw, targetInput].filter(Boolean).join(",")
+    );
     if (!file || !normalizedTargets) {
       setError("Silakan pilih file dan isi target nominal.");
       return;
@@ -324,6 +374,7 @@ export default function App() {
     try {
       const response = await fetch(joinUrl(apiBase, "/api/process"), {
         method: "POST",
+        headers: getAuthHeaders(),
         body: formData
       });
 
@@ -348,6 +399,164 @@ export default function App() {
     }
   };
 
+  const handleLogin = async (event) => {
+    event.preventDefault();
+    setAuthError("");
+
+    if (!supabase) {
+      setAuthError("Supabase Auth belum dikonfigurasi.");
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: authEmail.trim(),
+        password: authPassword
+      });
+      if (signInError) {
+        throw signInError;
+      }
+      setAuthPassword("");
+    } catch (err) {
+      setAuthError(err.message || "Login gagal.");
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+    }
+    setFile(null);
+    setTargetsRaw("");
+    setTargetInput("");
+    setTargetTokens([]);
+    setTolerance("");
+    setResult(null);
+    setError("");
+  };
+
+  const handleDownload = async () => {
+    if (!result?.download_url || !session?.access_token) return;
+
+    setDownloadLoading(true);
+    setError("");
+    try {
+      const dataUrl = result.download_url.replace("/api/download/", "/api/download-data/");
+      const response = await fetch(joinUrl(apiBase, dataUrl), {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.detail || "Gagal mengunduh file hasil.");
+      }
+
+      const payload = await response.json();
+      const binary = atob(payload.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        bytes[index] = binary.charCodeAt(index);
+      }
+      const blob = new Blob([bytes], {
+        type:
+          payload.media_type ||
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = payload.file_name || result.file_name || "hasil_piutang.xlsx";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (err) {
+      setError(err.message || "Gagal mengunduh file hasil.");
+    } finally {
+      setDownloadLoading(false);
+    }
+  };
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="page">
+        <div className="background" />
+        <main className="auth-shell">
+          <section className="auth-card">
+            <p className="brand-mark">
+              <img src="/snowing-snow-svgrepo-com.svg" alt="" aria-hidden="true" />
+              <span>Iceyuki AR Matcher</span>
+            </p>
+            <h1>Supabase Auth belum dikonfigurasi.</h1>
+            <p>
+              Isi `VITE_SUPABASE_URL` dan `VITE_SUPABASE_PUBLISHABLE_KEY` di
+              file environment frontend.
+            </p>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (authLoading) {
+    return (
+      <div className="page">
+        <div className="background" />
+        <main className="auth-shell">
+          <section className="auth-card auth-card--compact">
+            <span className="loading-spinner" aria-hidden="true" />
+            <strong>Memeriksa sesi login</strong>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="page">
+        <div className="background" />
+        <main className="auth-shell">
+          <section className="auth-card">
+            <p className="brand-mark">
+              <img src="/snowing-snow-svgrepo-com.svg" alt="" aria-hidden="true" />
+              <span>Iceyuki AR Matcher</span>
+            </p>
+            <h1>Login internal</h1>
+            <form className="auth-form" onSubmit={handleLogin}>
+              <label className="field">
+                <span className="label">Email</span>
+                <input
+                  type="email"
+                  autoComplete="email"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span className="label">Password</span>
+                <input
+                  type="password"
+                  autoComplete="current-password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                  required
+                />
+              </label>
+              {authError ? <p className="error auth-error">{authError}</p> : null}
+              <button className="primary" type="submit" disabled={authSubmitting}>
+                {authSubmitting ? "Memproses..." : "Login"}
+              </button>
+            </form>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="page">
       <div className="background" />
@@ -369,17 +578,23 @@ export default function App() {
       ) : null}
       <main className="container">
         <header className="hero">
-          <p className="badge">Invoice Matcher</p>
+          <p className="brand-mark">
+            <img src="/snowing-snow-svgrepo-com.svg" alt="" aria-hidden="true" />
+            <span>Iceyuki AR Matcher</span>
+          </p>
           <div className="hero-meta">
             <span className={`status-pill status-${backendStatus}`}>
               <span className="status-dot" aria-hidden="true" />
               {backendLabel}
             </span>
+            <button className="session-button" type="button" onClick={handleLogout}>
+              Logout
+            </button>
           </div>
-          <h1>Temukan kombinasi invoice sesuai nominal target.</h1>
+          <h1>Temukan piutang toko dari nominal pembayaran.</h1>
           <p className="subtitle">
-            Unggah Excel, tentukan target, dan hasilkan file kombinasi siap
-            unduh.
+            Unggah Excel, masukkan nominal pembayaran toko, lalu sistem
+            mencocokkan kombinasi piutang yang paling mendekati target.
           </p>
         </header>
 
@@ -391,7 +606,7 @@ export default function App() {
                 File Excel (.xlsx)
               </label>
               <span className="helper">
-                Unggah file invoice dalam format .xlsx.
+                Unggah file piutang dalam format .xlsx.
               </span>
               {file ? (
                 <div
@@ -443,7 +658,7 @@ export default function App() {
                       clearFile();
                     }}
                   >
-                    ✕
+                    x
                   </button>
                 </div>
               ) : (
@@ -491,11 +706,16 @@ export default function App() {
             </div>
 
             <label className="field">
-              <span className="label">Target nominal</span>
-              <span className="helper">Pisahkan lebih dari satu target dengan koma.</span>
+              <span className="label">Nominal pembayaran toko</span>
+              <span className="helper">Pisahkan lebih dari satu nominal dengan koma.</span>
               <div
                 className="target-input"
                 onClick={() => targetsInputRef.current?.focus()}
+                onBlur={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    commitTargets(targetInput);
+                  }
+                }}
               >
                 {targetTokens.map((token) => (
                   <span
@@ -518,7 +738,7 @@ export default function App() {
                           removeTargetById(token.id);
                         }}
                       >
-                        ✕
+                        x
                       </button>
                     </span>
                 ))}
@@ -529,7 +749,7 @@ export default function App() {
                   inputMode="numeric"
                   placeholder={
                     targetTokens.length === 0 && !targetInput
-                      ? "Contoh: 1.000.000, 2.000.000"
+                      ? "Contoh: 2.300.000, 4.150.000"
                       : ""
                   }
                   value={formatDigits(targetInput)}
@@ -582,7 +802,7 @@ export default function App() {
                     Memproses...
                   </>
                 ) : (
-                  "Proses file"
+                  "Cari piutang"
                 )}
               </button>
             </div>
@@ -600,9 +820,11 @@ export default function App() {
                     <strong className="result-count">{result.total_rows}</strong>
                     <span className="result-label">baris cocok.</span>
                   </div>
-                  <a
+                  <button
+                    type="button"
                     className="download"
-                    href={joinUrl(apiBase, result.download_url)}
+                    onClick={handleDownload}
+                    disabled={downloadLoading}
                   >
                     <span className="download-icon" aria-hidden="true">
                       <svg viewBox="0 0 24 24" role="img">
@@ -623,8 +845,8 @@ export default function App() {
                         />
                       </svg>
                     </span>
-                    Unduh file hasil
-                  </a>
+                    {downloadLoading ? "Mengunduh..." : "Unduh file hasil"}
+                  </button>
                 </div>
               ) : (
                 <p className="result-empty">Tidak ada kombinasi yang cocok.</p>
@@ -634,19 +856,19 @@ export default function App() {
         </section>
 
         <section className="note">
-          <h2>Cara pakai</h2>
+          <h2>Alur kerja</h2>
           <ol className="steps">
             <li>Upload file Excel.</li>
             <li>
-              Isi target (bisa lebih dari satu, pisahkan dengan koma).
+              Isi nominal pembayaran toko (bisa lebih dari satu).
             </li>
             <li>Isi toleransi (opsional).</li>
             <li>Klik proses, lalu download hasilnya.</li>
           </ol>
         </section>
         <footer className="footer">
-          <div>CISAN AR · Internal System</div>
-          <div>Central Integrated Services &amp; Application Network</div>
+          <div>Iceyuki AR Matcher</div>
+          <div>Sistem internal untuk pencocokan piutang toko</div>
         </footer>
       </main>
     </div>

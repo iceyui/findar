@@ -2,9 +2,11 @@
 set -euo pipefail
 
 DEFAULT_APP_DIR="/var/www/ar-bbn"
-DEFAULT_DOMAIN="ar.cisan.id"
-DEFAULT_API_DOMAIN="api.ar.cisan.id"
+DEFAULT_DOMAIN="ar.iceyuki.com"
+DEFAULT_API_DOMAIN="api-ar.iceyuki.com"
 DEFAULT_SERVICE_NAME="ar-bbn-api"
+DEFAULT_SUPABASE_URL=""
+DEFAULT_SUPABASE_PUBLISHABLE_KEY=""
 
 read -r -p "Masukkan path project [${DEFAULT_APP_DIR}]: " APP_DIR
 APP_DIR="${APP_DIR:-$DEFAULT_APP_DIR}"
@@ -14,6 +16,10 @@ read -r -p "Domain API [${DEFAULT_API_DOMAIN}]: " API_DOMAIN
 API_DOMAIN="${API_DOMAIN:-$DEFAULT_API_DOMAIN}"
 read -r -p "Nama service systemd [${DEFAULT_SERVICE_NAME}]: " SERVICE_NAME
 SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
+read -r -p "Supabase URL [${DEFAULT_SUPABASE_URL}]: " SUPABASE_URL
+SUPABASE_URL="${SUPABASE_URL:-$DEFAULT_SUPABASE_URL}"
+read -r -p "Supabase publishable/anon key [${DEFAULT_SUPABASE_PUBLISHABLE_KEY}]: " SUPABASE_PUBLISHABLE_KEY
+SUPABASE_PUBLISHABLE_KEY="${SUPABASE_PUBLISHABLE_KEY:-$DEFAULT_SUPABASE_PUBLISHABLE_KEY}"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Please run as root (use sudo)." >&2
@@ -38,6 +44,16 @@ pip install -r backend/requirements.txt
 if [[ ! -f backend/.env ]]; then
   cp backend/.env.example backend/.env
 fi
+if [[ -n "$SUPABASE_URL" ]]; then
+  grep -q '^SUPABASE_URL=' backend/.env \
+    && sed -i "s|^SUPABASE_URL=.*|SUPABASE_URL=${SUPABASE_URL}|" backend/.env \
+    || echo "SUPABASE_URL=${SUPABASE_URL}" >> backend/.env
+fi
+if [[ -n "$SUPABASE_PUBLISHABLE_KEY" ]]; then
+  grep -q '^SUPABASE_PUBLISHABLE_KEY=' backend/.env \
+    && sed -i "s|^SUPABASE_PUBLISHABLE_KEY=.*|SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}|" backend/.env \
+    || echo "SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}" >> backend/.env
+fi
 PORT_VALUE=$(grep -E '^PORT=' backend/.env | tail -n 1 | cut -d '=' -f2 | tr -d '\r')
 if [[ -z "$PORT_VALUE" ]]; then
   PORT_VALUE="9001"
@@ -48,6 +64,8 @@ cd "$APP_DIR/frontend"
 npm install
 if [[ ! -f .env ]]; then
   echo "VITE_API_BASE=https://$API_DOMAIN" > .env
+  echo "VITE_SUPABASE_URL=$SUPABASE_URL" >> .env
+  echo "VITE_SUPABASE_PUBLISHABLE_KEY=$SUPABASE_PUBLISHABLE_KEY" >> .env
 fi
 npm run build
 
@@ -59,7 +77,7 @@ chmod -R 775 "$APP_DIR/backend/uploads" "$APP_DIR/backend/outputs"
 # systemd service
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=AR BBN API
+Description=Iceyuki AR Matcher API
 After=network.target
 
 [Service]
