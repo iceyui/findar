@@ -63,6 +63,42 @@ npm run dev
 - Interval cleanup bisa diubah lewat `CLEANUP_INTERVAL_SECONDS`
 - Tema UI: ice/frost untuk branding iceyuki.com
 
+## Deploy via Coolify
+
+Gunakan 1 Project Coolify berisi 2 Application/resource terpisah:
+
+### Backend API
+- Root directory: `backend`
+- Build pack: `Dockerfile`
+- Dockerfile: `Dockerfile`
+- Port / exposed port: `9001`
+- Domain: `api-ar.iceyuki.com`
+- Health check path: `/api/health`
+- Environment variables:
+```
+HOST=0.0.0.0
+PORT=9001
+CORS_ORIGINS=https://ar.iceyuki.com
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
+ALLOWED_AUTH_EMAILS=admin@iceyuki.com
+```
+
+### Frontend Web
+- Root directory: `frontend`
+- Build pack: `Dockerfile`
+- Dockerfile: `Dockerfile`
+- Port / exposed port: `80`
+- Domain: `ar.iceyuki.com`
+- Environment variables:
+```
+VITE_API_BASE=https://api-ar.iceyuki.com
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
+```
+
+Catatan: variable `VITE_*` harus tersedia saat build frontend karena Vite memasukkannya ke bundle static. Di Coolify, tandai variable frontend tersebut sebagai build/build-time variable jika opsi itu tersedia.
+
 ## Deploy di VPS Ubuntu (contoh Nginx + systemd)
 
 ### 1) Persiapan server
