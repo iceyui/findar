@@ -165,6 +165,7 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [turnstileReady, setTurnstileReady] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileRender, setTurnstileRender] = useState(0);
   const turnstileRef = useRef(null);
   const turnstileWidgetId = useRef(null);
   const [file, setFile] = useState(null);
@@ -305,7 +306,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!turnstileReady || !turnstileRef.current || turnstileWidgetId.current !== null) return;
+    if (!turnstileReady || !turnstileRef.current) return;
+
+    if (turnstileWidgetId.current !== null) {
+      window.turnstile?.remove(turnstileWidgetId.current);
+      turnstileWidgetId.current = null;
+    }
 
     turnstileWidgetId.current = window.turnstile.render(turnstileRef.current, {
       sitekey: turnstileSiteKey,
@@ -316,7 +322,7 @@ export default function App() {
         setTurnstileToken("");
       },
     });
-  }, [turnstileReady]);
+  }, [turnstileReady, turnstileRender]);
 
   const clearFile = () => {
     setFile(null);
@@ -486,8 +492,10 @@ export default function App() {
       setAuthSubmitting(false);
       setTurnstileToken("");
       if (turnstileWidgetId.current !== null) {
-        window.turnstile?.reset(turnstileWidgetId.current);
+        window.turnstile?.remove(turnstileWidgetId.current);
+        turnstileWidgetId.current = null;
       }
+      setTurnstileRender((k) => k + 1);
     }
   };
 
@@ -504,8 +512,10 @@ export default function App() {
     setError("");
     setTurnstileToken("");
     if (turnstileWidgetId.current !== null) {
-      window.turnstile?.reset(turnstileWidgetId.current);
+      window.turnstile?.remove(turnstileWidgetId.current);
+      turnstileWidgetId.current = null;
     }
+    setTurnstileRender((k) => k + 1);
   };
 
   const handleDownload = async () => {
