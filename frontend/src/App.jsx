@@ -153,6 +153,9 @@ const removeDigitFromRaw = (rawValue, displayValue, cursorIndex, direction) => {
   return rebuilt;
 };
 
+const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
+const isTurnstileConfigured = Boolean(turnstileSiteKey);
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -160,6 +163,10 @@ export default function App() {
   const [authEmail, setAuthEmail] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const [turnstileReady, setTurnstileReady] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const turnstileRef = useRef(null);
+  const turnstileWidgetId = useRef(null);
   const [file, setFile] = useState(null);
   const [targetsRaw, setTargetsRaw] = useState("");
   const [targetInput, setTargetInput] = useState("");
@@ -272,6 +279,44 @@ export default function App() {
       window.clearInterval(intervalId);
     };
   }, [apiBase]);
+
+  useEffect(() => {
+    if (!isTurnstileConfigured) return;
+
+    let script = document.querySelector('script[src*="turnstile"]');
+    if (!script) {
+      script = document.createElement("script");
+      script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onTurnstileLoad";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+
+    window.onTurnstileLoad = () => {
+      setTurnstileReady(true);
+    };
+
+    return () => {
+      if (turnstileWidgetId.current !== null) {
+        window.turnstile?.remove(turnstileWidgetId.current);
+        turnstileWidgetId.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!turnstileReady || !turnstileRef.current || turnstileWidgetId.current !== null) return;
+
+    turnstileWidgetId.current = window.turnstile.render(turnstileRef.current, {
+      sitekey: turnstileSiteKey,
+      callback: (token) => {
+        setTurnstileToken(token);
+      },
+      "expired-callback": () => {
+        setTurnstileToken("");
+      },
+    });
+  }, [turnstileReady]);
 
   const clearFile = () => {
     setFile(null);
@@ -408,8 +453,25 @@ export default function App() {
       return;
     }
 
+    if (isTurnstileConfigured && !turnstileToken) {
+      setAuthError("Verifikasi Turnstile diperlukan.");
+      return;
+    }
+
     setAuthSubmitting(true);
     try {
+      if (isTurnstileConfigured) {
+        const verifyResp = await fetch(joinUrl(apiBase, "/api/verify-turnstile"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: turnstileToken }),
+        });
+        const verifyData = await verifyResp.json();
+        if (!verifyResp.ok || !verifyData.success) {
+          throw new Error("Verifikasi Turnstile gagal. Coba refresh halaman.");
+        }
+      }
+
       const { error: signInError } = await supabase.auth.signInWithPassword({
         email: authEmail.trim(),
         password: authPassword
@@ -422,6 +484,10 @@ export default function App() {
       setAuthError(err.message || "Login gagal.");
     } finally {
       setAuthSubmitting(false);
+      setTurnstileToken("");
+      if (turnstileWidgetId.current !== null) {
+        window.turnstile?.reset(turnstileWidgetId.current);
+      }
     }
   };
 
@@ -436,6 +502,10 @@ export default function App() {
     setTolerance("");
     setResult(null);
     setError("");
+    setTurnstileToken("");
+    if (turnstileWidgetId.current !== null) {
+      window.turnstile?.reset(turnstileWidgetId.current);
+    }
   };
 
   const handleDownload = async () => {
@@ -486,8 +556,8 @@ export default function App() {
         <main className="auth-shell">
           <section className="auth-card">
             <p className="brand-mark">
-              <img src="/snowing-snow-svgrepo-com.svg" alt="" aria-hidden="true" />
-              <span>Iceyuki AR Matcher</span>
+              <img src="/vanilla-bean-svgrepo-com.svg" alt="" aria-hidden="true" />
+              <span>AR Vanila</span>
             </p>
             <h1>Supabase Auth belum dikonfigurasi.</h1>
             <p>
@@ -521,8 +591,8 @@ export default function App() {
         <main className="auth-shell">
           <section className="auth-card">
             <p className="brand-mark">
-              <img src="/snowing-snow-svgrepo-com.svg" alt="" aria-hidden="true" />
-              <span>Iceyuki AR Matcher</span>
+              <img src="/vanilla-bean-svgrepo-com.svg" alt="" aria-hidden="true" />
+              <span>AR Vanila</span>
             </p>
             <h1>Login internal</h1>
             <form className="auth-form" onSubmit={handleLogin}>
@@ -546,6 +616,7 @@ export default function App() {
                   required
                 />
               </label>
+              {isTurnstileConfigured ? <div ref={turnstileRef} className="turnstile-wrap" /> : null}
               {authError ? <p className="error auth-error">{authError}</p> : null}
               <button className="primary" type="submit" disabled={authSubmitting}>
                 {authSubmitting ? "Memproses..." : "Login"}
@@ -579,8 +650,8 @@ export default function App() {
       <main className="container">
         <header className="hero">
           <p className="brand-mark">
-            <img src="/snowing-snow-svgrepo-com.svg" alt="" aria-hidden="true" />
-            <span>Iceyuki AR Matcher</span>
+            <img src="/vanilla-bean-svgrepo-com.svg" alt="" aria-hidden="true" />
+            <span>AR Vanila</span>
           </p>
           <div className="hero-meta">
             <span className={`status-pill status-${backendStatus}`}>
@@ -867,7 +938,7 @@ export default function App() {
           </ol>
         </section>
         <footer className="footer">
-          <div>Iceyuki AR Matcher</div>
+          <div>AR Vanila – ar.vanila.id</div>
           <div>Sistem internal untuk pencocokan piutang toko</div>
         </footer>
       </main>

@@ -1,5 +1,5 @@
 [Unit]
-Description=Iceyuki AR Matcher API
+Description=AR Vanila Matcher API
 After=network.target
 
 [Service]

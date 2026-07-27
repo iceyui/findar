@@ -1,4 +1,4 @@
-# Iceyuki AR Matcher
+# AR Vanila Matcher
 
 Versi web untuk mencari kombinasi piutang toko dari file Excel berdasarkan nominal pembayaran dan toleransi.
 
@@ -24,7 +24,7 @@ python backend\\run_dev.py
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
-ALLOWED_AUTH_EMAILS=admin@iceyuki.com
+ALLOWED_AUTH_EMAILS=admin@vanila.id
 ```
 
 ## Frontend (React + Vite)
@@ -61,7 +61,7 @@ npm run dev
 - Batas upload default 10MB
 - Cleanup otomatis file sementara tiap 1 jam (bisa diubah lewat `CLEANUP_TTL_SECONDS`)
 - Interval cleanup bisa diubah lewat `CLEANUP_INTERVAL_SECONDS`
-- Tema UI: ice/frost untuk branding iceyuki.com
+- Tema UI: vanilla/warm untuk branding vanila.id
 
 ## Deploy via Coolify
 
@@ -72,16 +72,16 @@ Gunakan 1 Project Coolify berisi 2 Application/resource terpisah:
 - Build pack: `Dockerfile`
 - Dockerfile: `Dockerfile`
 - Port / exposed port: `9001`
-- Domain: `api-ar.iceyuki.com`
+- Domain: `api-ar.vanila.id`
 - Health check path: `/api/health`
 - Environment variables:
 ```
 HOST=0.0.0.0
 PORT=9001
-CORS_ORIGINS=https://ar.iceyuki.com
+CORS_ORIGINS=https://ar.vanila.id
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
-ALLOWED_AUTH_EMAILS=admin@iceyuki.com
+ALLOWED_AUTH_EMAILS=admin@vanila.id
 ```
 
 ### Frontend Web
@@ -89,10 +89,10 @@ ALLOWED_AUTH_EMAILS=admin@iceyuki.com
 - Build pack: `Dockerfile`
 - Dockerfile: `Dockerfile`
 - Port / exposed port: `80`
-- Domain: `ar.iceyuki.com`
+- Domain: `ar.vanila.id`
 - Environment variables:
 ```
-VITE_API_BASE=https://api-ar.iceyuki.com
+VITE_API_BASE=https://api-ar.vanila.id
 VITE_SUPABASE_URL=https://your-project-ref.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
 ```
@@ -128,7 +128,7 @@ sudo nano /etc/systemd/system/ar-bbn-api.service
 Isi:
 ```
 [Unit]
-Description=Iceyuki AR Matcher API
+Description=AR Vanila Matcher API
 After=network.target
 
 [Service]
@@ -153,7 +153,7 @@ sudo systemctl status ar-bbn-api
 ```
 cd /var/www/ar-bbn/frontend
 npm install
-echo "VITE_API_BASE=https://api-ar.iceyuki.com" > .env
+echo "VITE_API_BASE=https://api-ar.vanila.id" > .env
 echo "VITE_SUPABASE_URL=https://your-project-ref.supabase.co" >> .env
 echo "VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key" >> .env
 npm run build
@@ -167,7 +167,7 @@ Isi:
 ```
 server {
     listen 80;
-    server_name ar.iceyuki.com;
+    server_name ar.vanila.id;
 
     root /var/www/ar-bbn/frontend/dist;
     index index.html;
@@ -190,7 +190,7 @@ Tambahkan server block untuk API subdomain:
 ```
 server {
     listen 80;
-    server_name api-ar.iceyuki.com;
+    server_name api-ar.vanila.id;
 
     location / {
         proxy_pass http://127.0.0.1:9001;
@@ -212,5 +212,5 @@ sudo systemctl reload nginx
 ### 6) (Opsional) HTTPS dengan Let's Encrypt
 ```
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d ar.iceyuki.com -d api-ar.iceyuki.com
+sudo certbot --nginx -d ar.vanila.id -d api-ar.vanila.id
 ```

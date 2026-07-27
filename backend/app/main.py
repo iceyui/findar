@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from pydantic import BaseModel
 
 from .invoice_finder import find_invoice_combinations_for_targets
 
@@ -36,6 +37,7 @@ CLEANUP_INTERVAL_SECONDS = int(
     os.getenv("CLEANUP_INTERVAL_SECONDS", str(CLEANUP_TTL_SECONDS))
 )
 PROCESS_TIMEOUT_SECONDS = int(os.getenv("PROCESS_TIMEOUT_SECONDS", "600"))
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_PUBLISHABLE_KEY = (
     os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
@@ -55,17 +57,17 @@ ALLOWED_AUTH_DOMAINS = {
 FILENAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 bearer_scheme = HTTPBearer(auto_error=False)
 
-app = FastAPI(title="Iceyuki AR Matcher API")
+app = FastAPI(title="AR Vanila Matcher API")
 
 cors_origins = os.getenv("CORS_ORIGINS", "").strip()
 if cors_origins:
     allowed_origins = [item.strip() for item in cors_origins.split(",") if item.strip()]
 else:
     allowed_origins = [
-        "https://ar.iceyuki.com",
-        "http://ar.iceyuki.com",
-        "https://api-ar.iceyuki.com",
-        "http://api-ar.iceyuki.com",
+        "https://ar.vanila.id",
+        "http://ar.vanila.id",
+        "https://api-ar.vanila.id",
+        "http://api-ar.vanila.id",
     ]
 
 app.add_middleware(
@@ -240,9 +242,37 @@ async def _shutdown() -> None:
         task.cancel()
 
 
+class TurnstileVerifyRequest(BaseModel):
+    token: str
+
+
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok", "auth_configured": bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY)}
+    return {
+        "status": "ok",
+        "auth_configured": bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY),
+        "turnstile_configured": bool(TURNSTILE_SECRET_KEY),
+    }
+
+
+@app.post("/api/verify-turnstile")
+async def verify_turnstile(body: TurnstileVerifyRequest):
+    if not TURNSTILE_SECRET_KEY:
+        return {"success": True, "skipped": True}
+
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            response = await client.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={
+                    "secret": TURNSTILE_SECRET_KEY,
+                    "response": body.token,
+                },
+            )
+            result = response.json()
+            return {"success": result.get("success", False)}
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Gagal memverifikasi Turnstile")
 
 
 @app.post("/api/process")

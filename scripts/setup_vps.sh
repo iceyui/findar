@@ -2,8 +2,8 @@
 set -euo pipefail
 
 DEFAULT_APP_DIR="/var/www/ar-bbn"
-DEFAULT_DOMAIN="ar.iceyuki.com"
-DEFAULT_API_DOMAIN="api-ar.iceyuki.com"
+DEFAULT_DOMAIN="ar.vanila.id"
+DEFAULT_API_DOMAIN="api-ar.vanila.id"
 DEFAULT_SERVICE_NAME="ar-bbn-api"
 DEFAULT_SUPABASE_URL=""
 DEFAULT_SUPABASE_PUBLISHABLE_KEY=""
@@ -77,7 +77,7 @@ chmod -R 775 "$APP_DIR/backend/uploads" "$APP_DIR/backend/outputs"
 # systemd service
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=Iceyuki AR Matcher API
+Description=AR Vanila Matcher API
 After=network.target
 
 [Service]
