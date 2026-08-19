@@ -50,6 +50,39 @@ VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
 npm run dev
 ```
 
+## Run dengan Docker (docker compose)
+
+Frontend di-serve Nginx (non-root) dan API di-proxy via Nginx (`/api/`), jadi
+cukup akses satu port saja (default `80`) tanpa perlu CORS atau port API publik.
+
+1) Siapkan environment:
+```
+copy .env.example .env
+copy backend\.env.example backend\.env
+```
+Isi `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` di `.env` (untuk build frontend)
+dan di `backend\.env` (untuk runtime API). Turnstile: isi `VITE_TURNSTILE_SITE_KEY`
+di `.env` dan `TURNSTILE_SECRET_KEY` di `backend\.env`. Kosongkan keduanya untuk
+mode dev (widget otomatis disembunyikan).
+
+2) Build & jalankan:
+```
+docker compose up --build
+```
+
+3) Buka `http://localhost` (port host bisa diubah di `docker-compose.yml`).
+
+### Hardening bawaan
+- Backend & Nginx jalan sebagai **non-root user**
+- `read_only` filesystem + `tmpfs` (yang perlu writable saja yang di-mount)
+- `cap_drop: ALL`, `no-new-privileges`, `init: true`
+- Healthcheck kedua service, `depends_on` menunggu backend sehat
+- Resource limits (`mem_limit` / `cpus` / `pids_limit`)
+- Log rotation (`max-size` / `max-file`)
+- Upload max `20m` di Nginx (app masih enforce 10MB)
+- Security headers (nosniff, frame, referrer, permissions)
+- Data persisten di named volume `uploads` & `outputs`
+
 ## API
 - Semua endpoint proses/download membutuhkan `Authorization: Bearer <supabase_access_token>`
 - `POST /api/process` upload file + target(s) + tolerance

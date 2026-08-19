@@ -11,8 +11,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./backend
 
-RUN mkdir -p /app/backend/uploads /app/backend/outputs
+RUN mkdir -p /app/backend/uploads /app/backend/outputs \
+    && useradd --system --uid 10001 --create-home appuser \
+    && chown -R appuser:appuser /app
 
 EXPOSE 9001
+
+USER appuser
 
 CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT}"]
