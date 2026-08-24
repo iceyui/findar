@@ -1,6 +1,7 @@
-target
+__pycache__
+*.pyc
+venv
 .env
 .env.*
 uploads
 outputs
-*.xlsx

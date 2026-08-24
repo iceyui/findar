@@ -3,28 +3,39 @@
 Versi web untuk mencari kombinasi piutang toko dari file Excel berdasarkan nominal pembayaran dan toleransi.
 
 ## Struktur
-- `backend/` FastAPI untuk upload, proses, dan download hasil
+- `backend/` API **Rust (axum)** untuk upload, proses, dan download hasil
+- `backend-py/` backend lama (FastAPI/Python), dipertahankan sebagai referensi paritas — bisa dihapus kapan saja
 - `frontend/` React (Vite) untuk UI upload & hasil
 
-## Backend (FastAPI)
-1) Buat virtual env dan install dependencies:
-```
-python -m venv venv
-venv\\Scripts\\activate
-pip install -r backend\\requirements.txt
-```
+## Backend (Rust + axum)
+Pencarian kombinasi memakai branch-and-bound dengan pruning (bukan brute-force),
+jauh lebih cepat daripada implementasi Python sebelumnya.
 
-2) Jalankan API:
+1) Install Rust (https://rustup.rs), lalu jalankan API:
 ```
 copy backend\\.env.example backend\\.env
-python backend\\run_dev.py
+cd backend
+cargo run --release
 ```
 
-3) Isi konfigurasi Supabase Auth di `backend\\.env`:
+2) Isi konfigurasi Supabase Auth di `backend\\.env`:
 ```
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=your-publishable-or-anon-key
 ALLOWED_AUTH_EMAILS=admin@vanila.id
+```
+
+3) Jalankan test:
+```
+cargo test
+```
+
+### Backend legacy (Python)
+Referensi implementasi lama ada di `backend-py/`:
+```
+cd backend-py
+pip install -r requirements.txt
+python run_dev.py
 ```
 
 ## Frontend (React + Vite)

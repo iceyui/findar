@@ -6,8 +6,8 @@ services:
     env_file:
       - ./backend/.env
     volumes:
-      - uploads:/app/backend/uploads
-      - outputs:/app/backend/outputs
+      - uploads:/app/uploads
+      - outputs:/app/outputs
     read_only: true
     tmpfs:
       - /tmp:size=64m
@@ -18,11 +18,7 @@ services:
     init: true
     pids_limit: 256
     healthcheck:
-      test:
-        - "CMD"
-        - "python"
-        - "-c"
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/api/health', timeout=3)"
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9001/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3

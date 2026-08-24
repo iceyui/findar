@@ -1,22 +1,31 @@
-FROM python:3.12-slim
+FROM rust:1-alpine AS build
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PORT=9001
+RUN apk add --no-cache musl-dev
+
+WORKDIR /build
+
+# Cache dependencies: build with a stub main first.
+COPY Cargo.toml Cargo.lock* ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs \
+    && cargo build --release \
+    && rm -rf src target/release/deps/ar_vanila_api*
+
+COPY src ./src
+RUN touch src/main.rs && cargo build --release
+
+FROM alpine:3.20
+
+RUN addgroup -g 10001 appgroup \
+    && adduser -D -u 10001 -G appgroup appuser
+
+COPY --from=build /build/target/release/ar-vanila-api /usr/local/bin/ar-vanila-api
 
 WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . ./backend
-
-RUN mkdir -p /app/backend/uploads /app/backend/outputs \
-    && useradd --system --uid 10001 --create-home appuser \
-    && chown -R appuser:appuser /app
-
-EXPOSE 9001
+RUN mkdir -p /app/uploads /app/outputs \
+    && chown -R appuser:appgroup /app
 
 USER appuser
 
-CMD ["sh", "-c", "uvicorn backend.app.main:app --host 0.0.0.0 --port ${PORT}"]
+EXPOSE 9001
+
+CMD ["ar-vanila-api"]

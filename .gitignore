@@ -3,12 +3,14 @@ __pycache__/
 *.pyc
 .env
 backend/.env
+backend-py/.env
 frontend/.env
 uploads/
 outputs/
 *.xlsx
 backend/uploads/
 backend/outputs/
-backend/venv/
+backend/target/
+backend-py/venv/
 frontend/node_modules/
 frontend/dist/
