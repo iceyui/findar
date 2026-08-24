@@ -156,6 +156,72 @@ const removeDigitFromRaw = (rawValue, displayValue, cursorIndex, direction) => {
 const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY || "";
 const isTurnstileConfigured = Boolean(turnstileSiteKey);
 
+const FILE_DB_NAME = "ar-vanila";
+const FILE_STORE = "files";
+const FILE_KEY = "current";
+
+function openFileDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(FILE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(FILE_STORE)) {
+        request.result.createObjectStore(FILE_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveStoredFile(file) {
+  try {
+    const db = await openFileDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readwrite");
+      tx.objectStore(FILE_STORE).put(
+        { blob: file, name: file.name, type: file.type },
+        FILE_KEY
+      );
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    /* persistence is best-effort */
+  }
+}
+
+async function loadStoredFile() {
+  try {
+    const db = await openFileDb();
+    const record = await new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readonly");
+      const request = tx.objectStore(FILE_STORE).get(FILE_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
+    if (!record?.blob) return null;
+    return new File([record.blob], record.name || "upload.xlsx", {
+      type: record.type || ""
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function removeStoredFile() {
+  try {
+    const db = await openFileDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(FILE_STORE, "readwrite");
+      tx.objectStore(FILE_STORE).delete(FILE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function App() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -177,7 +243,8 @@ export default function App() {
   const [backendLatency, setBackendLatency] = useState(null);
   const [loading, setLoading] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [fileFromStorage, setFileFromStorage] = useState(false);
+  const [toasts, setToasts] = useState([]);
   const [result, setResult] = useState(null);
   const fileInputRef = useRef(null);
   const targetsInputRef = useRef(null);
@@ -230,6 +297,18 @@ export default function App() {
     } catch (err) {
       window.localStorage.removeItem(TARGETS_STORAGE_KEY);
     }
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadStoredFile().then((stored) => {
+      if (active && stored) {
+        setFile(stored);
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -326,9 +405,22 @@ export default function App() {
 
   const clearFile = () => {
     setFile(null);
+    setFileFromStorage(false);
+    removeStoredFile();
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  };
+
+  const handleClearAll = () => {
+    clearFile();
+    setTargetsRaw("");
+    setTargetInput("");
+    setTargetTokens([]);
+    setTolerance("");
+    setResult(null);
+    window.localStorage.removeItem(TARGETS_STORAGE_KEY);
+    pushToast("info", "Form dikosongkan.");
   };
 
   const getAuthHeaders = () => {
@@ -336,6 +428,18 @@ export default function App() {
     return {
       Authorization: `Bearer ${session.access_token}`
     };
+  };
+
+  const dismissToast = (id) => {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  };
+
+  const pushToast = (type, message) => {
+    const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setToasts((prev) => [...prev.slice(-3), { id, type, message }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, 5000);
   };
 
   const canSubmit = useMemo(() => {
@@ -393,11 +497,10 @@ export default function App() {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setError("");
     setResult(null);
 
     if (!session?.access_token) {
-      setError("Sesi login tidak valid. Silakan login ulang.");
+      pushToast("error", "Sesi login tidak valid. Silakan login ulang.");
       return;
     }
 
@@ -405,7 +508,7 @@ export default function App() {
       [targetsRaw, targetInput].filter(Boolean).join(",")
     );
     if (!file || !normalizedTargets) {
-      setError("Silakan pilih file dan isi target nominal.");
+      pushToast("error", "Silakan pilih file dan isi target nominal.");
       return;
     }
 
@@ -435,18 +538,20 @@ export default function App() {
       }
 
       setResult(data);
+      if (data.found) {
+        pushToast("success", `Ditemukan ${data.total_rows} baris cocok. Siap diunduh.`);
+      } else {
+        pushToast("info", "Tidak ada kombinasi yang cocok.");
+      }
     } catch (err) {
-      setError(err.message || "Something went wrong");
+      pushToast("error", err.message || "Something went wrong");
     } finally {
       setLoading(false);
-      setFile(null);
+      setFileFromStorage(true);
       setTargetsRaw("");
       setTargetInput("");
       setTargetTokens([]);
       setTolerance("");
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
     }
   };
 
@@ -503,13 +608,11 @@ export default function App() {
     if (supabase) {
       await supabase.auth.signOut();
     }
-    setFile(null);
     setTargetsRaw("");
     setTargetInput("");
     setTargetTokens([]);
     setTolerance("");
     setResult(null);
-    setError("");
     setTurnstileToken("");
     if (turnstileWidgetId.current !== null) {
       window.turnstile?.remove(turnstileWidgetId.current);
@@ -522,7 +625,6 @@ export default function App() {
     if (!result?.download_url || !session?.access_token) return;
 
     setDownloadLoading(true);
-    setError("");
     try {
       const dataUrl = result.download_url.replace("/api/download/", "/api/download-data/");
       const response = await fetch(joinUrl(apiBase, dataUrl), {
@@ -552,8 +654,9 @@ export default function App() {
       anchor.click();
       anchor.remove();
       window.URL.revokeObjectURL(downloadUrl);
+      pushToast("success", "File hasil berhasil diunduh.");
     } catch (err) {
-      setError(err.message || "Gagal mengunduh file hasil.");
+      pushToast("error", err.message || "Gagal mengunduh file hasil.");
     } finally {
       setDownloadLoading(false);
     }
@@ -643,20 +746,26 @@ export default function App() {
       <div className="background" />
       {loading ? (
         <div
-          className="loading-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-live="polite"
-        >
-          <div className="loading-card">
-            <span className="loading-spinner" aria-hidden="true" />
-            <div className="loading-text">
-              <strong>Sedang menghitung</strong>
-              <span>Mohon ditunggu, proses bisa memakan waktu.</span>
-            </div>
-          </div>
-        </div>
+          className="loading-bar"
+          role="progressbar"
+          aria-label="Sedang menghitung kombinasi"
+        />
       ) : null}
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast toast-${toast.type}`}>
+            <span className="toast-message">{toast.message}</span>
+            <button
+              type="button"
+              className="toast-close"
+              aria-label="Tutup notifikasi"
+              onClick={() => dismissToast(toast.id)}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
       <main className="container">
         <header className="hero">
           <p className="brand-mark">
@@ -691,7 +800,7 @@ export default function App() {
               </span>
               {file ? (
                 <div
-                  className="file-status"
+                  className={`file-status${fileFromStorage ? " file-status--stored" : ""}`}
                   onClick={() => {
                     if (fileInputRef.current) {
                       fileInputRef.current.click();
@@ -728,6 +837,9 @@ export default function App() {
                       </svg>
                     </div>
                     <span className="file-status__name">{file.name}</span>
+                    {fileFromStorage ? (
+                      <span className="file-stored-badge">File lama</span>
+                    ) : null}
                   </div>
                   <button
                     type="button"
@@ -779,6 +891,7 @@ export default function App() {
                       const selected = event.target.files?.[0] || null;
                       if (selected) {
                         setFile(selected);
+                        saveStoredFile(selected);
                       }
                     }}
                   />
@@ -792,11 +905,6 @@ export default function App() {
               <div
                 className="target-input"
                 onClick={() => targetsInputRef.current?.focus()}
-                onBlur={(event) => {
-                  if (!event.currentTarget.contains(event.relatedTarget)) {
-                    commitTargets(targetInput);
-                  }
-                }}
               >
                 {targetTokens.map((token) => (
                   <span
@@ -871,6 +979,11 @@ export default function App() {
                 inputMode="numeric"
                 placeholder={`Default: ${formatNumber(DEFAULT_TOLERANCE)}`}
                 value={tolerance}
+                onFocus={() => {
+                  if (targetInput.trim()) {
+                    commitTargets(targetInput);
+                  }
+                }}
                 onChange={(event) => setTolerance(formatDigits(event.target.value))}
               />
             </label>
@@ -886,11 +999,17 @@ export default function App() {
                   "Cari piutang"
                 )}
               </button>
+              <button
+                className="secondary clear-button"
+                type="button"
+                onClick={handleClearAll}
+                disabled={loading}
+              >
+                Clear
+              </button>
             </div>
             </fieldset>
           </form>
-
-          {error ? <p className="error">{error}</p> : null}
 
           {result ? (
             <div className="result-card">
