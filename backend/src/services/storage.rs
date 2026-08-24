@@ -23,8 +23,10 @@ pub fn sanitize_filename(name: &str) -> String {
     cleaned
 }
 
+/// Whitelisted file/identifier names: alphanumerics, `_ . -`, and no leading
+/// dot (blocks hidden files such as the `.index.json` sidecar).
 pub fn is_safe_name(name: &str) -> bool {
-    Regex::new(FILENAME_PATTERN).unwrap().is_match(name)
+    !name.starts_with('.') && Regex::new(FILENAME_PATTERN).unwrap().is_match(name)
 }
 
 pub fn new_upload_id(original_name: &str) -> (String, String) {

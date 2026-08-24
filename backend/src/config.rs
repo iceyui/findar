@@ -20,6 +20,10 @@ pub struct Config {
     pub cleanup_ttl_seconds: u64,
     pub cleanup_interval_seconds: u64,
     pub process_timeout_seconds: u64,
+    /// Hard ceiling on explored DFS nodes per request (fail-fast guard).
+    pub search_node_budget: u64,
+    /// Hard ceiling on emitted result rows per request.
+    pub max_result_rows: usize,
 }
 
 const DEFAULT_CORS_ORIGINS: [&str; 4] = [
@@ -111,6 +115,8 @@ impl Config {
             cleanup_ttl_seconds: ttl,
             cleanup_interval_seconds: env_u64("CLEANUP_INTERVAL_SECONDS", ttl),
             process_timeout_seconds: env_u64("PROCESS_TIMEOUT_SECONDS", 600),
+            search_node_budget: env_u64("SEARCH_NODE_BUDGET", 200_000_000),
+            max_result_rows: env_usize("MAX_RESULT_ROWS", 250_000),
         }
     }
 

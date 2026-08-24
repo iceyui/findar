@@ -8,7 +8,9 @@ pub mod writer;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::matcher::engine::{find_combinations, Combo, Deadline, InvoiceRow};
+use crate::matcher::engine::{
+    find_combinations, Combo, Deadline, InvoiceRow,
+};
 use crate::matcher::loader::{load_grouped, LoaderError};
 use crate::matcher::writer::{build_output_path, commas, write_results, ResultRow};
 
@@ -16,12 +18,17 @@ use crate::matcher::writer::{build_output_path, commas, write_results, ResultRow
 pub enum MatcherError {
     Loader(LoaderError),
     Timeout,
+    /// Node budget exhausted — parameter space too wide to finish promptly.
+    BudgetExceeded,
     Write(String),
 }
 
 pub struct RunOutcome {
     pub output_file: Option<PathBuf>,
     pub total_rows: usize,
+    /// True when the search stopped early because the result cap was hit;
+    /// the produced file contains a partial set of matches.
+    pub truncated: bool,
 }
 
 fn row_to_result(
@@ -57,6 +64,7 @@ fn row_to_result(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_for_targets(
     input: &Path,
     targets: &[i64],
@@ -64,24 +72,44 @@ pub fn run_for_targets(
     max_invoices: usize,
     output_dir: &Path,
     timeout: Duration,
+    node_budget: u64,
+    result_cap: usize,
 ) -> Result<RunOutcome, MatcherError> {
     let grouped = load_grouped(input).map_err(MatcherError::Loader)?;
 
     let deadline = Deadline::after(timeout.as_secs());
     let max_invoices = max_invoices.max(1);
     let mut all_rows: Vec<ResultRow> = Vec::new();
+    let mut truncated = false;
 
-    for &target in targets {
+    'targets: for &target in targets {
         let target_label = format!("Rp{}", commas(target));
         for (customer, group_rows) in &grouped.groups {
-            let combos =
-                find_combinations(group_rows, target, tolerance, max_invoices, deadline)
-                    .map_err(|_| MatcherError::Timeout)?;
+            let search =
+                find_combinations(
+                    group_rows,
+                    target,
+                    tolerance,
+                    max_invoices,
+                    deadline,
+                    node_budget,
+                    result_cap.saturating_sub(all_rows.len()).max(1),
+                )
+                .map_err(|err| match err {
+                    engine::SearchError::Timeout => MatcherError::Timeout,
+                    engine::SearchError::BudgetExceeded => MatcherError::BudgetExceeded,
+                })?;
+
             all_rows.extend(
-                combos
-                    .iter()
-                    .map(|combo| row_to_result(combo, customer, target_label.clone(), group_rows)),
+                search.combos.iter().map(|combo| {
+                    row_to_result(combo, customer, target_label.clone(), group_rows)
+                }),
             );
+
+            if search.truncated || all_rows.len() >= result_cap {
+                truncated = true;
+                break 'targets;
+            }
         }
     }
 
@@ -89,6 +117,7 @@ pub fn run_for_targets(
         return Ok(RunOutcome {
             output_file: None,
             total_rows: 0,
+            truncated,
         });
     }
 
@@ -98,6 +127,7 @@ pub fn run_for_targets(
     Ok(RunOutcome {
         output_file: Some(output_file),
         total_rows: all_rows.len(),
+        truncated,
     })
 }
 
@@ -106,7 +136,6 @@ mod tests {
     use super::*;
     use crate::matcher::loader::format_date_label;
     use chrono::NaiveDate;
-    use std::io::Write as _;
 
     /// End-to-end: build a synthetic .xlsx (same layout the frontend users
     /// upload), run the full pipeline, and verify the result workbook.
@@ -151,6 +180,8 @@ mod tests {
             5,
             &dir,
             Duration::from_secs(30),
+            u64::MAX,
+            usize::MAX,
         )
         .expect("matcher should succeed");
 
@@ -214,6 +245,8 @@ mod tests {
             5,
             Path::new(&out_dir),
             Duration::from_secs(600),
+            u64::MAX,
+            usize::MAX,
         )
         .expect("matcher should succeed");
         let elapsed = started.elapsed();

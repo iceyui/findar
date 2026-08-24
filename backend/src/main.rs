@@ -29,7 +29,11 @@ async fn main() {
     let ttl = config.cleanup_ttl_seconds;
     let interval = config.cleanup_interval_seconds.max(1);
 
-    let state = Arc::new(AppState::new(config));
+    let output_index = Arc::new(services::output_index::OutputIndex::load(
+        &config.output_dir,
+    ));
+
+    let state = Arc::new(AppState::new(config, output_index));
 
     // Periodic cleanup of stale uploads/outputs (port of `_periodic_cleanup_loop`).
     {
@@ -40,6 +44,7 @@ async fn main() {
                 ticker.tick().await;
                 services::storage::cleanup_old_files(&state.config.upload_dir, ttl);
                 services::storage::cleanup_old_files(&state.config.output_dir, ttl);
+                state.output_index.prune(&state.config.output_dir, ttl);
             }
         });
     }

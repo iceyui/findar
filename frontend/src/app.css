@@ -142,6 +142,11 @@ body {
   background: #fdf6e7;
 }
 
+.toast-warn {
+  border-left-color: #d99a12;
+  background: #fff8e8;
+}
+
 .toast-message {
   flex: 1;
   line-height: 1.45;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const DEFAULT_TOLERANCE = 500;
+const DEFAULT_MAX_INVOICES = 5;
 const TARGETS_STORAGE_KEY = "ar-bbn.targets";
 
 const joinUrl = (base, path) => {
@@ -239,6 +240,7 @@ export default function App() {
   const [targetInput, setTargetInput] = useState("");
   const [targetTokens, setTargetTokens] = useState([]);
   const [tolerance, setTolerance] = useState("");
+  const [maxInvoices, setMaxInvoices] = useState("5");
   const [backendStatus, setBackendStatus] = useState("checking");
   const [backendLatency, setBackendLatency] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -418,6 +420,7 @@ export default function App() {
     setTargetInput("");
     setTargetTokens([]);
     setTolerance("");
+    setMaxInvoices("5");
     setResult(null);
     window.localStorage.removeItem(TARGETS_STORAGE_KEY);
     pushToast("info", "Form dikosongkan.");
@@ -523,6 +526,12 @@ export default function App() {
     } else {
       formData.append("tolerance", String(DEFAULT_TOLERANCE));
     }
+    const rawMax = (maxInvoices || "").replace(/\D/g, "");
+    const parsedMax = parseInt(rawMax, 10) || DEFAULT_MAX_INVOICES;
+    formData.append(
+      "max_invoices",
+      String(Math.min(20, Math.max(1, parsedMax)))
+    );
 
     setLoading(true);
     try {
@@ -539,7 +548,14 @@ export default function App() {
 
       setResult(data);
       if (data.found) {
-        pushToast("success", `Ditemukan ${data.total_rows} baris cocok. Siap diunduh.`);
+        if (data.truncated) {
+          pushToast(
+            "warn",
+            `Hasil dibatasi ${data.total_rows} baris (melebihi batas server). Coba turunkan Max Invoice.`
+          );
+        } else {
+          pushToast("success", `Ditemukan ${data.total_rows} baris cocok. Siap diunduh.`);
+        }
       } else {
         pushToast("info", "Tidak ada kombinasi yang cocok.");
       }
@@ -552,6 +568,7 @@ export default function App() {
       setTargetInput("");
       setTargetTokens([]);
       setTolerance("");
+      setMaxInvoices("5");
     }
   };
 
@@ -612,6 +629,7 @@ export default function App() {
     setTargetInput("");
     setTargetTokens([]);
     setTolerance("");
+    setMaxInvoices("5");
     setResult(null);
     setTurnstileToken("");
     if (turnstileWidgetId.current !== null) {
@@ -985,6 +1003,23 @@ export default function App() {
                   }
                 }}
                 onChange={(event) => setTolerance(formatDigits(event.target.value))}
+              />
+            </label>
+
+            <label className="field">
+              <span className="label">Max invoice per kombinasi (opsional)</span>
+              <span className="helper">Default {DEFAULT_MAX_INVOICES}. Rentang 1–20. Makin besar makin banyak kombinasi yang dicek.</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder={`Default: ${DEFAULT_MAX_INVOICES}`}
+                value={maxInvoices}
+                onFocus={() => {
+                  if (targetInput.trim()) {
+                    commitTargets(targetInput);
+                  }
+                }}
+                onChange={(event) => setMaxInvoices(formatDigits(event.target.value))}
               />
             </label>
 

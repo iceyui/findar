@@ -15,11 +15,23 @@ use crate::state::AppState;
 
 const XLSX_MIME: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-fn resolve_output(state: &AppState, file_name: &str) -> AppResult<std::path::PathBuf> {
+fn resolve_output(
+    state: &AppState,
+    file_name: &str,
+    owner_email: &str,
+) -> AppResult<std::path::PathBuf> {
     storage::cleanup_old_files(&state.config.output_dir, state.config.cleanup_ttl_seconds);
+    state
+        .output_index
+        .prune(&state.config.output_dir, state.config.cleanup_ttl_seconds);
 
     if !storage::is_safe_name(file_name) {
         return Err(AppError::bad("Invalid file name"));
+    }
+
+    // Ownership check: results are only visible to the user who ran the search.
+    if !state.output_index.is_owner(file_name, owner_email) {
+        return Err(AppError::not_found("File not found"));
     }
 
     let path = state.config.output_dir.join(file_name);
@@ -35,8 +47,8 @@ pub async fn download_file(
     headers: HeaderMap,
     Path(file_name): Path<String>,
 ) -> AppResult<impl IntoResponse> {
-    auth::require_user(&state, &headers).await?;
-    let path = resolve_output(&state, &file_name)?;
+    let user = auth::require_user(&state, &headers).await?;
+    let path = resolve_output(&state, &file_name, &user.email)?;
 
     let bytes = tokio::fs::read(&path)
         .await
@@ -60,8 +72,8 @@ pub async fn download_file_data(
     headers: HeaderMap,
     Path(file_name): Path<String>,
 ) -> AppResult<Json<Value>> {
-    auth::require_user(&state, &headers).await?;
-    let path = resolve_output(&state, &file_name)?;
+    let user = auth::require_user(&state, &headers).await?;
+    let path = resolve_output(&state, &file_name, &user.email)?;
 
     let bytes = tokio::fs::read(&path)
         .await

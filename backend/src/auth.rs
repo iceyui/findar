@@ -7,7 +7,6 @@ use crate::state::AppState;
 
 /// Result of a successful authentication check.
 pub struct AuthUser {
-    #[allow(dead_code)]
     pub email: String,
 }
 

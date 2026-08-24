@@ -52,10 +52,13 @@ pub async fn process_file(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> AppResult<Json<Value>> {
-    auth::require_user(&state, &headers).await?;
+    let user = auth::require_user(&state, &headers).await?;
 
     storage::cleanup_old_files(&state.config.upload_dir, state.config.cleanup_ttl_seconds);
     storage::cleanup_old_files(&state.config.output_dir, state.config.cleanup_ttl_seconds);
+    state
+        .output_index
+        .prune(&state.config.output_dir, state.config.cleanup_ttl_seconds);
 
     let mut upload_id: Option<String> = None;
     let mut targets_raw: Option<String> = None;
@@ -168,6 +171,8 @@ pub async fn process_file(
     // Run the CPU-bound search off the async runtime with a hard deadline.
     let output_dir = state.config.output_dir.clone();
     let timeout_ms = state.config.process_timeout_seconds * 1000;
+    let node_budget = state.config.search_node_budget;
+    let result_cap = state.config.max_result_rows;
 
     let permit = state
         .process_semaphore
@@ -186,6 +191,8 @@ pub async fn process_file(
             max_invoices,
             &output_dir,
             Duration::from_millis(timeout_ms),
+            node_budget,
+            result_cap,
         )
     })
     .await;
@@ -199,15 +206,24 @@ pub async fn process_file(
         Err(_) => return Err(AppError::internal("Proses gagal. Coba lagi.")),
     };
 
-    outcome_response(result)
+    outcome_response(&state, &user.email, result)
 }
 
-fn outcome_response(result: Result<RunOutcome, MatcherError>) -> AppResult<Json<Value>> {
+fn outcome_response(
+    state: &AppState,
+    owner_email: &str,
+    result: Result<RunOutcome, MatcherError>,
+) -> AppResult<Json<Value>> {
     let outcome = match result {
         Ok(outcome) => outcome,
         Err(MatcherError::Timeout) => {
             return Err(AppError::timeout(
                 "Proses terlalu lama. Coba kurangi jumlah piutang atau target.",
+            ));
+        }
+        Err(MatcherError::BudgetExceeded) => {
+            return Err(AppError::bad(
+                "Kombinasi terlalu banyak untuk Max Invoice ini pada file tersebut. Turunkan Max Invoice per kombinasi (misal 5–8).",
             ));
         }
         Err(MatcherError::Loader(loader_err)) => {
@@ -224,6 +240,7 @@ fn outcome_response(result: Result<RunOutcome, MatcherError>) -> AppResult<Json<
             "found": false,
             "total_rows": 0,
             "download_url": Value::Null,
+            "truncated": outcome.truncated,
         }))),
         Some(output_path) => {
             let file_name = output_path
@@ -231,11 +248,18 @@ fn outcome_response(result: Result<RunOutcome, MatcherError>) -> AppResult<Json<
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_string();
+            // Record ownership so only this user can download the result.
+            state.output_index.insert(
+                &state.config.output_dir,
+                &file_name,
+                owner_email,
+            );
             Ok(Json(json!({
                 "found": true,
                 "total_rows": outcome.total_rows,
                 "download_url": format!("/api/download/{file_name}"),
                 "file_name": file_name,
+                "truncated": outcome.truncated,
             })))
         }
     }

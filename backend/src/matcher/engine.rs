@@ -52,6 +52,18 @@ impl Deadline {
 #[derive(Debug)]
 pub enum SearchError {
     Timeout,
+    /// Explored more nodes than the configured budget — the parameter space
+    /// is too wide (raise max_invoices? tolerance?) to finish promptly.
+    BudgetExceeded,
+}
+
+/// Outcome of a bounded search.
+#[derive(Debug)]
+pub struct SearchOutcome {
+    pub combos: Vec<Combo>,
+    /// True when the result cap was reached and the search stopped early;
+    /// the returned combos are complete for the portion explored.
+    pub truncated: bool,
 }
 
 const CHECK_EVERY: u64 = 4096;
@@ -66,6 +78,9 @@ struct Search<'a> {
     max_invoices: usize,
     deadline: Deadline,
     nodes: AtomicU64,
+    node_budget: u64,
+    result_cap: usize,
+    stopped: bool,
     out: Vec<Combo>,
 }
 
@@ -82,6 +97,9 @@ impl<'a> Search<'a> {
 
     fn check_deadline(&self) -> Result<(), SearchError> {
         let n = self.nodes.fetch_add(1, Ordering::Relaxed);
+        if n >= self.node_budget {
+            return Err(SearchError::BudgetExceeded);
+        }
         if n % CHECK_EVERY == 0 && self.deadline.expired() {
             return Err(SearchError::Timeout);
         }
@@ -95,6 +113,9 @@ impl<'a> Search<'a> {
         sum: i64,
         chosen: &mut Vec<usize>,
     ) -> Result<(), SearchError> {
+        if self.stopped {
+            return Ok(());
+        }
         self.check_deadline()?;
 
         if depth > 0 && (sum - self.target).abs() <= self.tol {
@@ -106,6 +127,10 @@ impl<'a> Search<'a> {
                 indices,
                 total: sum,
             });
+            if self.out.len() >= self.result_cap {
+                self.stopped = true;
+                return Ok(());
+            }
         }
 
         if pos >= self.sorted.len() || depth >= self.max_invoices {
@@ -133,6 +158,9 @@ impl<'a> Search<'a> {
             chosen.push(self.sorted[idx]);
             self.dfs(idx + 1, depth + 1, next_sum, chosen)?;
             chosen.pop();
+            if self.stopped {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -140,19 +168,21 @@ impl<'a> Search<'a> {
 }
 
 /// Finds all combinations of size 1..=max_invoices whose total lies within
-/// `[target - tolerance, target + tolerance]`.
+/// `[target - tolerance, target + tolerance]`, bounded by `node_budget` and
+/// `result_cap`.
 pub fn find_combinations(
     rows: &[InvoiceRow],
     target: i64,
     tolerance: i64,
     max_invoices: usize,
     deadline: Deadline,
-) -> Result<Vec<Combo>, SearchError> {
+    node_budget: u64,
+    result_cap: usize,
+) -> Result<SearchOutcome, SearchError> {
     let mut sorted: Vec<usize> = (0..rows.len()).collect();
     sorted.sort_by(|a, b| rows[*b].amount.cmp(&rows[*a].amount));
 
-    // reach[i] = sum of sorted[i..] capped at k elements per query; we store the
-    // plain suffix sum of ALL remaining items and cap the slice at query time.
+    // reach[i] = suffix sum of sorted[i..]; `reachable` caps the slice at query time.
     let mut reach = vec![0i64; rows.len() + 1];
     for i in (0..rows.len()).rev() {
         reach[i] = reach[i + 1] + rows[sorted[i]].amount;
@@ -167,13 +197,19 @@ pub fn find_combinations(
         max_invoices: max_invoices.max(1),
         deadline,
         nodes: AtomicU64::new(0),
+        node_budget: node_budget.max(1),
+        result_cap: result_cap.max(1),
+        stopped: false,
         out: Vec::new(),
     };
 
     let mut chosen = Vec::with_capacity(search.max_invoices);
     search.dfs(0, 0, 0, &mut chosen)?;
 
-    Ok(std::mem::take(&mut search.out))
+    Ok(SearchOutcome {
+        truncated: search.stopped,
+        combos: std::mem::take(&mut search.out),
+    })
 }
 
 /// Naive exhaustive reference used by property tests to prove the pruned
@@ -258,7 +294,7 @@ mod tests {
             let k = (rng().rem_euclid(4) + 1) as usize;
 
             let fast =
-                find_combinations(&rows, target, tol, k, Deadline::after(30)).expect("no timeout");
+                find_combinations(&rows, target, tol, k, Deadline::after(30), u64::MAX, usize::MAX).expect("no timeout").combos;
             let slow = brute_force_reference(&rows, target, tol, k);
 
             assert_same_set(
@@ -272,7 +308,7 @@ mod tests {
     #[test]
     fn finds_exact_match() {
         let rows = vec![row(100), row(200), row(300)];
-        let combos = find_combinations(&rows, 300, 0, 3, Deadline::after(10)).unwrap();
+        let combos = find_combinations(&rows, 300, 0, 3, Deadline::after(10), u64::MAX, usize::MAX).unwrap().combos;
         let totals: Vec<i64> = combos.iter().map(|c| c.total).collect();
         assert!(totals.contains(&300));
         // single invoice 300 and combination 100+200 both match
@@ -282,14 +318,14 @@ mod tests {
     #[test]
     fn respects_tolerance_window() {
         let rows = vec![row(1000), row(1010)];
-        let combos = find_combinations(&rows, 1005, 10, 2, Deadline::after(10)).unwrap();
+        let combos = find_combinations(&rows, 1005, 10, 2, Deadline::after(10), u64::MAX, usize::MAX).unwrap().combos;
         assert_eq!(combos.len(), 2); // both singles fall inside ±10 of 1005
     }
 
     #[test]
     fn caps_combination_size() {
         let rows = vec![row(100), row(100), row(100)];
-        let combos = find_combinations(&rows, 300, 0, 2, Deadline::after(10)).unwrap();
+        let combos = find_combinations(&rows, 300, 0, 2, Deadline::after(10), u64::MAX, usize::MAX).unwrap().combos;
         assert!(combos.iter().all(|c| c.indices.len() <= 2));
     }
 
@@ -299,7 +335,56 @@ mod tests {
         let deadline = Deadline {
             at: Instant::now() - std::time::Duration::from_secs(1),
         };
-        let result = find_combinations(&rows, 999_999_999, 0, 5, deadline);
+        let result = find_combinations(&rows, 999_999_999, 0, 5, deadline, u64::MAX, usize::MAX);
         assert!(matches!(result, Err(SearchError::Timeout)));
+    }
+
+    #[test]
+    fn budget_exceeded_fails_fast() {
+        // Window wider than any possible sum -> pruning never fires, so the
+        // node budget is the only guard.
+        let rows: Vec<InvoiceRow> = (0..40).map(|_| row(1000)).collect();
+        let result = find_combinations(
+            &rows,
+            20_000,
+            1_000_000,
+            5,
+            Deadline::after(60),
+            10, // tiny node budget
+            usize::MAX,
+        );
+        assert!(matches!(result, Err(SearchError::BudgetExceeded)));
+    }
+
+    #[test]
+    fn result_cap_truncates_and_flags() {
+        // Every single invoice matches a wide window -> many results.
+        let rows: Vec<InvoiceRow> = (0..50).map(|i| row((i as i64 + 1) * 100)).collect();
+        let outcome = find_combinations(
+            &rows,
+            25_500,
+            1_000_000,
+            2,
+            Deadline::after(30),
+            u64::MAX,
+            25, // tight cap
+        )
+        .unwrap();
+        assert!(outcome.truncated);
+        assert_eq!(outcome.combos.len(), 25);
+
+        // Same search without cap is not flagged.
+        let full = find_combinations(
+            &rows,
+            25_500,
+            1_000_000,
+            2,
+            Deadline::after(30),
+            u64::MAX,
+            usize::MAX,
+        )
+        .unwrap();
+        assert!(!full.truncated);
+        assert!(full.combos.len() > 25);
     }
 }
