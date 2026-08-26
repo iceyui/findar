@@ -3,8 +3,13 @@ services:
     build:
       context: ./backend
     container_name: ar-vanila-backend
+    # Opsional: tanpa .env, API tetap jalan (auth & Turnstile off).
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
+    networks:
+      - internal
+    stop_grace_period: 30s
     volumes:
       - uploads:/app/uploads
       - outputs:/app/outputs
@@ -43,6 +48,9 @@ services:
     container_name: ar-vanila-frontend
     ports:
       - "80:8080"
+    networks:
+      - edge
+      - internal
     depends_on:
       backend:
         condition: service_healthy
@@ -79,3 +87,10 @@ services:
 volumes:
   uploads:
   outputs:
+
+networks:
+  # Terhubung ke host (via published port) — hanya frontend.
+  edge:
+  # Backend tidak pernah expose port; hanya reachable dari frontend.
+  internal:
+    internal: true
