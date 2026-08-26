@@ -65,8 +65,15 @@ npm run dev
 
 Frontend di-serve Nginx (non-root) dan API di-proxy via Nginx (`/api/`), jadi
 cukup akses satu port saja (default `80`) tanpa perlu CORS atau port API publik.
+Backend tidak pernah expose port ke host — hanya reachable dari frontend via
+network internal.
 
-1) Siapkan environment:
+### 0) Environment (opsional)
+
+Tanpa `.env`, stack tetap jalan dalam mode dev: Supabase Auth & Turnstile off
+(API endpoint proteksi akan return 503 sampai dikonfigurasi). Untuk production,
+isi kredensial dulu:
+
 ```
 copy .env.example .env
 copy backend\.env.example backend\.env
@@ -76,23 +83,35 @@ dan di `backend\.env` (untuk runtime API). Turnstile: isi `VITE_TURNSTILE_SITE_K
 di `.env` dan `TURNSTILE_SECRET_KEY` di `backend\.env`. Kosongkan keduanya untuk
 mode dev (widget otomatis disembunyikan).
 
-2) Build & jalankan:
+Catatan: variabel `VITE_*` dibake saat `docker build`, jadi menggantinya butuh
+rebuild image frontend (bukan sekadar restart).
+
+### 1) Build & jalankan
 ```
 docker compose up --build
 ```
 
-3) Buka `http://localhost` (port host bisa diubah di `docker-compose.yml`).
+### 2) Buka `http://localhost` (port host bisa diubah di `docker-compose.yml`).
 
 ### Hardening bawaan
 - Backend & Nginx jalan sebagai **non-root user**
 - `read_only` filesystem + `tmpfs` (yang perlu writable saja yang di-mount)
 - `cap_drop: ALL`, `no-new-privileges`, `init: true`
+- Segmentasi jaringan: backend di network `internal` (terisolasi dari host), hanya frontend yang terhubung
 - Healthcheck kedua service, `depends_on` menunggu backend sehat
 - Resource limits (`mem_limit` / `cpus` / `pids_limit`)
 - Log rotation (`max-size` / `max-file`)
 - Upload max `20m` di Nginx (app masih enforce 10MB)
-- Security headers (nosniff, frame, referrer, permissions)
+- Security headers: CSP, nosniff, frame, referrer, permissions, `server_tokens off`
+- Gzip + cache immutable untuk asset hash Vite
 - Data persisten di named volume `uploads` & `outputs`
+
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` jalan otomatis tiap push/PR:
+- Backend: `cargo fmt --check`, `cargo clippy`, `cargo test`
+- Docker: build kedua image (dengan cache) + scan vulnerability Trivy
+  (gagal jika ada HIGH/CRITICAL yang sudah tersedia fix-nya)
 
 ## API
 - Semua endpoint proses/download membutuhkan `Authorization: Bearer <supabase_access_token>`
